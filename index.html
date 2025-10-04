@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Собери все суффиксы причастий</title>
+    <style>
+        * {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+        }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            z-index: 100;
+            text-align: center;
+        }
+        #mobileControls {
+            position: fixed;
+            bottom: 20px;
+            width: 100%;
+            display: none;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
+            z-index: 50;
+        }
+        .control-btn {
+            width: 80px;
+            height: 80px;
+            background: rgba(255,255,255,0.3);
+            border: 2px solid white;
+            border-radius: 50%;
+            color: white;
+            font-size: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        #soundToggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            background: rgba(255,255,255,0.3);
+            border: 2px solid white;
+            border-radius: 50%;
+            color: white;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 60;
+        }
+        #collectionPanel {
+            position: fixed;
+            right: 20px;
+            top: 80px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #4CAF50;
+            border-radius: 10px;
+            padding: 10px;
+            color: white;
+            min-width: 140px;
+            z-index: 40;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        #collectionTitle {
+            font-size: 14px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 8px;
+            color: #4CAF50;
+        }
+        .collection-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            padding: 4px;
+            border-radius: 5px;
+            transition: all 0.3s ease;
+        }
+        .collection-item.found {
+            background: rgba(76, 175, 80, 0.3);
+            border: 1px solid #4CAF50;
+        }
+        .collection-item.missing {
+            display: none;
+        }
+        .suffix-badge {
+            width: 25px;
+            height: 25px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 8px;
+            font-size: 12px;
+            background: #4CAF50;
+            color: white;
+        }
+        .suffix-name {
+            font-size: 12px;
+        }
+        
+        /* Стили для скроллбара */
+        #collectionPanel::-webkit-scrollbar {
+            width: 6px;
+        }
+        #collectionPanel::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+        }
+        #collectionPanel::-webkit-scrollbar-thumb {
+            background: #4CAF50;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Загрузка игры...</div>
+    <div id="soundToggle">🔇</div>
+    <div id="collectionPanel">
+        <div id="collectionTitle">НАЙДЕННЫЕ СУФФИКСЫ</div>
+        <div id="collectionList"></div>
+    </div>
+    <div id="mobileControls">
+        <div class="control-btn" id="leftBtn">←</div>
+        <div class="control-btn" id="rightBtn">→</div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    
+    <script>
+        // Константы игры
+        const GAME_CONFIG = {
+            MAX_LEAVES: 5,
+            LEAF_SPAWN_RATE: 0.03,
+            PLAYER_SPEED: 40,
+            BASE_FALL_SPEED: 2,
+            LEVEL_UP_SCORE: 10,
+            INITIAL_LIVES: 3,
+            MOBILE_SPEED_MULTIPLIER: 1.5,
+            PARTICLE_COUNT: 8,
+            LEAF_SPAWN_INTERVAL: 800
+        };
+
+        // Элементы DOM
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const loadingElement = document.getElementById("loading");
+        const leftBtn = document.getElementById("leftBtn");
+        const rightBtn = document.getElementById("rightBtn");
+        const mobileControls = document.getElementById("mobileControls");
+        const soundToggle = document.getElementById("soundToggle");
+        const collectionList = document.getElementById("collectionList");
+        const collectionPanel = document.getElementById("collectionPanel");
+
+        // Настройка canvas
+        function setupCanvas() {
+            const isMobile = window.innerWidth <= 768;
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            if (isMobile) {
+                player.w = 80;
+                player.h = 100;
+                player.y = canvas.height - 120;
+            } else {
+                player.w = 100;
+                player.h = 120;
+                player.y = canvas.height - 150;
+            }
+            
+            player.x = canvas.width / 2 - player.w / 2;
+        }
+
+        // Игровые данные
+        let score = 0;
+        let lives = GAME_CONFIG.INITIAL_LIVES;
+        let level = 1;
+        let gameState = "loading";
+        let assetsLoaded = 0;
+        let totalAssets = 0;
+        let isMobile = false;
+        let lastLeafSpawnTime = 0;
+        let soundEnabled = true;
+        let audioContext = null;
+        
+        // Эффекты для нового уровня
+        let levelUpEffect = {
+            active: false,
+            timer: 0,
+            duration: 90, // 1.5 секунды при 60 FPS
+            message: ""
+        };
+        
+        // Система коллекционирования
+        const collectedSuffixes = new Set();
+        const allParticipleSuffixes = [
+            { suffix: "ущ", name: "Действ. наст. вр." },
+            { suffix: "ющ", name: "Действ. наст. вр." },
+            { suffix: "ащ", name: "Действ. наст. вр." },
+            { suffix: "ящ", name: "Действ. наст. вр." },
+            { suffix: "вш", name: "Действ. прош. вр." },
+            { suffix: "ш", name: "Действ. прош. вр." },
+            { suffix: "ем", name: "Страд. наст. вр." },
+            { suffix: "ом", name: "Страд. наст. вр." },
+            { suffix: "им", name: "Страд. наст. вр." },
+            { suffix: "нн", name: "Страд. прош. вр." },
+            { suffix: "енн", name: "Страд. прош. вр." },
+            { suffix: "т", name: "Страд. прош. вр." }
+        ];
+        
+        // Анимации
+        let particles = [];
+        let playerScale = 1;
+        let scaleDirection = 1;
+
+        // Игрок
+        const player = {
+            x: 0, y: 0, w: 100, h: 120,
+            targetX: 0
+        };
+
+        let leaves = [];
+        let touchStartX = 0;
+
+        // Ложные суффиксы (не причастия)
+        const falseSuffixes = ["ик", "чик", "еньк", "оньк", "оват", "еват", "к", "ск", "ист"];
+
+        // Запуск эффекта нового уровня
+        function startLevelUpEffect() {
+            levelUpEffect.active = true;
+            levelUpEffect.timer = 0;
+            levelUpEffect.message = "УРОВЕНЬ " + level;
+        }
+
+        // Обновление эффекта нового уровня
+        function updateLevelUpEffect() {
+            if (!levelUpEffect.active) return;
+            
+            levelUpEffect.timer++;
+            if (levelUpEffect.timer >= levelUpEffect.duration) {
+                levelUpEffect.active = false;
+            }
+        }
+
+        // Отрисовка эффекта нового уровня
+        function drawLevelUpEffect() {
+            if (!levelUpEffect.active) return;
+            
+            const progress = levelUpEffect.timer / levelUpEffect.duration;
+            const alpha = 1 - progress;
+            const scale = 1 + progress * 0.5;
+            
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = '#FFD700';
+            ctx.font = 'bold 48px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // Обводка текста
+            ctx.strokeStyle = '#FF6B00';
+            ctx.lineWidth = 6;
+            ctx.strokeText(levelUpEffect.message, canvas.width / 2, canvas.height / 2);
+            
+            // Сам текст
+            ctx.fillText(levelUpEffect.message, canvas.width / 2, canvas.height / 2);
+            
+            // Дополнительные блестки
+            ctx.fillStyle = '#FFFFFF';
+            for (let i = 0; i < 5; i++) {
+                const angle = (Date.now() / 200 + i * Math.PI * 0.4) % (Math.PI * 2);
+                const distance = 100 + Math.sin(Date.now() / 100 + i) * 20;
+                const x = canvas.width / 2 + Math.cos(angle) * distance;
+                const y = canvas.height / 2 + Math.sin(angle) * distance;
+                const size = 5 + Math.sin(Date.now() / 150 + i) * 3;
+                
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            ctx.restore();
+        }
+
+        // Инициализация коллекции
+        function initCollection() {
+            collectionList.innerHTML = '';
+            allParticipleSuffixes.forEach(item => {
+                const collectionItem = document.createElement('div');
+                collectionItem.className = 'collection-item missing';
+                collectionItem.innerHTML = `
+                    <div class="suffix-badge">${item.suffix}</div>
+                    <div class="suffix-name">${item.name}</div>
+                `;
+                collectionList.appendChild(collectionItem);
+            });
+        }
+
+        // Обновление отображения коллекции
+        function updateCollectionDisplay() {
+            const items = collectionList.querySelectorAll('.collection-item');
+            items.forEach((item, index) => {
+                const suffixData = allParticipleSuffixes[index];
+                if (collectedSuffixes.has(suffixData.suffix)) {
+                    item.className = 'collection-item found';
+                } else {
+                    item.className = 'collection-item missing';
+                }
+            });
+            
+            if (collectedSuffixes.size > 0) {
+                collectionPanel.style.display = 'block';
+            } else {
+                collectionPanel.style.display = 'none';
+            }
+        }
+
+        // Проверка на завершение коллекции
+        function checkCollectionComplete() {
+            return collectedSuffixes.size === allParticipleSuffixes.length;
+        }
+
+        // УПРОЩЕННАЯ СИСТЕМА ЗВУКОВ
+        function createBeepSound(frequency, duration, volume = 0.3) {
+            return {
+                play: function() {
+                    if (!soundEnabled || !audioContext) return;
+                    
+                    try {
+                        const oscillator = audioContext.createOscillator();
+                        const gainNode = audioContext.createGain();
+                        
+                        oscillator.connect(gainNode);
+                        gainNode.connect(audioContext.destination);
+                        
+                        oscillator.frequency.value = frequency;
+                        oscillator.type = 'sine';
+                        
+                        gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+                        
+                        oscillator.start(audioContext.currentTime);
+                        oscillator.stop(audioContext.currentTime + duration);
+                    } catch (e) {
+                        console.log("Ошибка воспроизведения звука:", e);
+                    }
+                }
+            };
+        }
+
+        // Программные звуки
+        const sounds = {
+            correct: createBeepSound(800, 0.2, 0.2),
+            wrong: createBeepSound(300, 0.3, 0.2),
+            levelup: createBeepSound(1200, 0.5, 0.3),
+            newSuffix: createBeepSound(1000, 0.4, 0.3),
+            collectionComplete: createBeepSound(1500, 1.0, 0.4),
+            bgMusic: {
+                playing: false,
+                play: function() {
+                    if (!soundEnabled || !audioContext) return;
+                    this.playing = true;
+                    this.interval = setInterval(() => {
+                        if (this.playing && soundEnabled) {
+                            const beep = createBeepSound(600 + Math.random() * 200, 0.1, 0.1);
+                            beep.play();
+                        }
+                    }, 1000);
+                },
+                pause: function() {
+                    this.playing = false;
+                    if (this.interval) {
+                        clearInterval(this.interval);
+                    }
+                }
+            }
+        };
+
+        // Инициализация аудио контекста
+        function initAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                console.log("Аудио не поддерживается:", e);
+            }
+        }
+
+        // Переключение звука
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
+            soundToggle.textContent = soundEnabled ? "🔊" : "🔇";
+            
+            if (!soundEnabled) {
+                sounds.bgMusic.pause();
+            } else if (gameState === "play") {
+                sounds.bgMusic.play();
+            }
+            
+            localStorage.setItem('soundEnabled', soundEnabled);
+        }
+
+        // Автоматическое создание изображений
+        function createGameImage(name, width, height) {
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            
+            let color, text, emoji;
+            
+            if (name.includes('background')) {
+                color = '#1a237e';
+                text = 'ЛЕСНОЙ ФОН';
+                emoji = '🌲🌳';
+            } else if (name.includes('start')) {
+                color = '#2e7d32';
+                text = 'СОБЕРИ ВСЕ СУФФИКСЫ';
+                emoji = '🎮✨';
+            } else if (name.includes('gameover')) {
+                color = '#c62828';
+                text = 'КОНЕЦ ИГРЫ';
+                emoji = '💀📉';
+            } else if (name.includes('character')) {
+                color = '#ff6f00';
+                text = 'ИГРОК';
+                emoji = '🎯';
+            } else if (name.includes('leaf')) {
+                color = name.includes('Maple') ? '#e65100' : 
+                       name.includes('Oak') ? '#5d4037' : '#388e3c';
+                text = name.includes('Maple') ? 'КЛЕН' : 
+                      name.includes('Oak') ? 'ДУБ' : 'БЕРЕЗА';
+                emoji = name.includes('Maple') ? '🍁' : 
+                       name.includes('Oak') ? '🍂' : '🍃';
+            } else if (name.includes('acorn')) {
+                color = '#5d4037';
+                text = 'ЖЕЛУДЬ';
+                emoji = '🌰';
+            } else {
+                color = '#6a1b9a';
+                text = name.toUpperCase();
+                emoji = '❓';
+            }
+            
+            const gradient = ctx.createLinearGradient(0, 0, width, height);
+            gradient.addColorStop(0, color);
+            gradient.addColorStop(1, darkenColor(color, 0.4));
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, width, height);
+            
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${Math.min(width/12, 16)}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            if (width > 200) {
+                ctx.fillText(text, width/2, height/2 - 20);
+                ctx.font = `${Math.min(width/8, 40)}px Arial`;
+                ctx.fillText(emoji, width/2, height/2 + 20);
+            } else {
+                ctx.fillText(text, width/2, height/2 - 10);
+                ctx.font = `${Math.min(width/6, 24)}px Arial`;
+                ctx.fillText(emoji, width/2, height/2 + 15);
+            }
+            
+            ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(2, 2, width-4, height-4);
+            
+            const img = new Image();
+            img.src = canvas.toDataURL();
+            return img;
+        }
+
+        function darkenColor(color, factor) {
+            const hex = color.replace('#', '');
+            const num = parseInt(hex, 16);
+            const r = Math.max(0, Math.min(255, (num >> 16) - factor * 100));
+            const g = Math.max(0, Math.min(255, (num >> 8 & 0x00FF) - factor * 100));
+            const b = Math.max(0, Math.min(255, (num & 0x0000FF) - factor * 100));
+            return "#" + (b | (g << 8) | (r << 16)).toString(16).padStart(6, '0');
+        }
+
+        // Система частиц для анимаций
+        function createParticles(x, y, color, count = GAME_CONFIG.PARTICLE_COUNT) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 8,
+                    vy: (Math.random() - 0.5) * 8,
+                    life: 1,
+                    color: color,
+                    size: Math.random() * 4 + 2
+                });
+            }
+        }
+
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                p.vy += 0.1;
+                
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        function drawParticles() {
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+        }
+
+        // Функция для отрисовки текста с обводкой
+        function drawTextWithOutline(text, x, y, fontSize = 20) {
+            ctx.font = `bold ${fontSize}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 4;
+            ctx.strokeText(text, x, y);
+            
+            ctx.fillStyle = 'white';
+            ctx.fillText(text, x, y);
+        }
+
+        // Загрузка ресурсов
+        const images = {};
+
+        function loadAssets() {
+            const imageConfigs = [
+                { key: 'background', file: 'background.png', width: 800, height: 600 },
+                { key: 'startScreen', file: 'start_screen.png', width: 800, height: 600 },
+                { key: 'gameOverScreen', file: 'gameover_screen.png', width: 800, height: 600 },
+                { key: 'character', file: 'character.png', width: 120, height: 150 },
+                { key: 'leafMaple', file: 'leaf_maple.png', width: 80, height: 80 },
+                { key: 'leafOak', file: 'leaf_oak.png', width: 80, height: 80 },
+                { key: 'leafBirch', file: 'leaf_birch.png', width: 80, height: 80 },
+                { key: 'acorn', file: 'acorn.png', width: 40, height: 40 }
+            ];
+
+            totalAssets = imageConfigs.length;
+            let loadedCount = 0;
+            
+            function onAssetLoaded() {
+                loadedCount++;
+                const progress = Math.round((loadedCount / totalAssets) * 100);
+                loadingElement.textContent = `Загрузка... ${progress}%`;
+                
+                if (loadedCount >= totalAssets) {
+                    setTimeout(() => {
+                        gameState = "start";
+                        loadingElement.style.display = "none";
+                        isMobile = window.innerWidth <= 768;
+                        mobileControls.style.display = isMobile ? 'flex' : 'none';
+                        
+                        const savedSound = localStorage.getItem('soundEnabled');
+                        if (savedSound !== null) {
+                            soundEnabled = savedSound === 'true';
+                        }
+                        soundToggle.textContent = soundEnabled ? "🔊" : "🔇";
+                        
+                        initCollection();
+                        collectionPanel.style.display = 'none';
+                    }, 500);
+                }
+            }
+            
+            imageConfigs.forEach(config => {
+                const img = new Image();
+                
+                img.onload = () => {
+                    images[config.key] = img;
+                    onAssetLoaded();
+                };
+                
+                img.onerror = () => {
+                    images[config.key] = createGameImage(config.key, config.width, config.height);
+                    onAssetLoaded();
+                };
+                
+                img.src = config.file;
+            });
+        }
+
+        // Игровые функции
+        function startGame() {
+            score = 0;
+            lives = GAME_CONFIG.INITIAL_LIVES;
+            level = 1;
+            leaves = [];
+            particles = [];
+            collectedSuffixes.clear();
+            gameState = "play";
+            player.x = canvas.width / 2 - player.w / 2;
+            player.targetX = player.x;
+            lastLeafSpawnTime = Date.now();
+            
+            updateCollectionDisplay();
+            
+            if (soundEnabled) {
+                sounds.bgMusic.play();
+            }
+        }
+
+        function endGame() {
+            gameState = "gameover";
+            sounds.bgMusic.pause();
+            createParticles(canvas.width/2, canvas.height/2, '#FF5555', 20);
+        }
+
+        function createLeaf() {
+            if (leaves.length >= GAME_CONFIG.MAX_LEAVES) return;
+            
+            const isParticiple = Math.random() < 0.5;
+            let suffix;
+            
+            if (isParticiple) {
+                const availableSuffixes = allParticipleSuffixes.map(item => item.suffix);
+                suffix = availableSuffixes[Math.floor(Math.random() * availableSuffixes.length)];
+            } else {
+                suffix = falseSuffixes[Math.floor(Math.random() * falseSuffixes.length)];
+            }
+            
+            const leafImages = ['leafMaple', 'leafOak', 'leafBirch'];
+            const imgKey = leafImages[Math.floor(Math.random() * leafImages.length)];
+            
+            leaves.push({
+                x: Math.random() * (canvas.width - 80),
+                y: -100,
+                w: 80,
+                h: 80,
+                suffix,
+                isParticiple,
+                imgKey,
+                scale: 0,
+                rotation: Math.random() * Math.PI * 2
+            });
+            
+            lastLeafSpawnTime = Date.now();
+        }
+
+        function updateGame() {
+            if (gameState !== "play") return;
+
+            player.x += (player.targetX - player.x) * 0.2;
+
+            playerScale += 0.02 * scaleDirection;
+            if (playerScale > 1.1) scaleDirection = -1;
+            if (playerScale < 0.9) scaleDirection = 1;
+
+            const currentTime = Date.now();
+            if (leaves.length < GAME_CONFIG.MAX_LEAVES && 
+                currentTime - lastLeafSpawnTime > GAME_CONFIG.LEAF_SPAWN_INTERVAL) {
+                createLeaf();
+            }
+
+            for (let i = leaves.length - 1; i >= 0; i--) {
+                const leaf = leaves[i];
+                
+                if (leaf.scale < 1) {
+                    leaf.scale += 0.05;
+                }
+                
+                leaf.rotation += 0.02;
+                leaf.y += (GAME_CONFIG.BASE_FALL_SPEED + level) * (isMobile ? GAME_CONFIG.MOBILE_SPEED_MULTIPLIER : 1);
+                
+                if (leaf.y + leaf.h > player.y &&
+                    leaf.x < player.x + player.w &&
+                    leaf.x + leaf.w > player.x) {
+                    
+                    if (leaf.isParticiple) {
+                        score++;
+                        sounds.correct.play();
+                        
+                        if (!collectedSuffixes.has(leaf.suffix)) {
+                            collectedSuffixes.add(leaf.suffix);
+                            sounds.newSuffix.play();
+                            updateCollectionDisplay();
+                            
+                            createParticles(player.x + player.w/2, player.y, '#FFD700', 20);
+                            
+                            if (checkCollectionComplete()) {
+                                sounds.collectionComplete.play();
+                                createParticles(canvas.width/2, canvas.height/2, '#FFD700', 50);
+                                score += 50;
+                            }
+                        } else {
+                            createParticles(player.x + player.w/2, player.y, '#55FF55', 15);
+                        }
+                        
+                        if (score % GAME_CONFIG.LEVEL_UP_SCORE === 0) {
+                            level++;
+                            sounds.levelup.play();
+                            // ЗАМЕНА ТРЯСКИ НА ПРИЯТНЫЙ ЭФФЕКТ
+                            startLevelUpEffect();
+                            createParticles(canvas.width/2, canvas.height/2, '#FFFF55', 25);
+                        }
+                    } else {
+                        lives--;
+                        sounds.wrong.play();
+                        createParticles(player.x + player.w/2, player.y, '#FF5555', 15);
+                        if (lives <= 0) endGame();
+                    }
+                    leaves.splice(i, 1);
+                    continue;
+                }
+                
+                if (leaf.y > canvas.height) {
+                    leaves.splice(i, 1);
+                }
+            }
+
+            updateLevelUpEffect();
+            updateParticles();
+        }
+
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            switch (gameState) {
+                case "start":
+                    if (images.startScreen) {
+                        ctx.drawImage(images.startScreen, 0, 0, canvas.width, canvas.height);
+                    }
+                    ctx.fillStyle = "white";
+                    ctx.font = "24px Arial";
+                    ctx.textAlign = "center";
+                    ctx.fillText("Собери все 12 суффиксов причастий!", canvas.width / 2, canvas.height / 2 - 50);
+                    ctx.font = "20px Arial";
+                    ctx.fillText("Нажми ПРОБЕЛ, чтобы начать", canvas.width / 2, canvas.height - 80);
+                    break;
+                    
+                case "gameover":
+                    if (images.gameOverScreen) {
+                        ctx.drawImage(images.gameOverScreen, 0, 0, canvas.width, canvas.height);
+                    }
+                    ctx.fillStyle = "white";
+                    ctx.font = "32px Arial";
+                    ctx.textAlign = "center";
+                    ctx.fillText("Очки: " + score, canvas.width / 2, canvas.height / 2 - 20);
+                    ctx.fillText("Собрано: " + collectedSuffixes.size + "/12", canvas.width / 2, canvas.height / 2 + 20);
+                    ctx.font = "24px Arial";
+                    ctx.fillText("Нажми ПРОБЕЛ, чтобы сыграть снова", canvas.width / 2, canvas.height - 80);
+                    break;
+                    
+                case "play":
+                    if (images.background) {
+                        ctx.drawImage(images.background, 0, 0, canvas.width, canvas.height);
+                    }
+                    
+                    leaves.forEach(leaf => {
+                        ctx.save();
+                        ctx.translate(leaf.x + leaf.w/2, leaf.y + leaf.h/2);
+                        ctx.scale(leaf.scale, leaf.scale);
+                        ctx.rotate(leaf.rotation);
+                        
+                        if (images[leaf.imgKey]) {
+                            ctx.drawImage(images[leaf.imgKey], -leaf.w/2, -leaf.h/2, leaf.w, leaf.h);
+                        }
+                        
+                        drawTextWithOutline(leaf.suffix, 0, 8, 20);
+                        ctx.restore();
+                    });
+                    
+                    ctx.save();
+                    ctx.translate(player.x + player.w/2, player.y + player.h/2);
+                    ctx.scale(playerScale, playerScale);
+                    if (images.character) {
+                        ctx.drawImage(images.character, -player.w/2, -player.h/2, player.w, player.h);
+                    }
+                    ctx.restore();
+                    
+                    drawParticles();
+                    
+                    // Отрисовка эффекта нового уровня (поверх всего)
+                    drawLevelUpEffect();
+                    
+                    ctx.textAlign = "left";
+                    ctx.fillStyle = "white";
+                    ctx.font = "20px Arial";
+                    ctx.fillText("Очки: " + score, 20, 30);
+                    ctx.fillText("Уровень: " + level, 20, 60);
+                    ctx.fillText("Собрано: " + collectedSuffixes.size + "/12", 20, 90);
+                    ctx.fillText("Листьев: " + leaves.length + "/" + GAME_CONFIG.MAX_LEAVES, 20, 120);
+                    
+                    if (images.acorn) {
+                        for (let i = 0; i < lives; i++) {
+                            ctx.drawImage(images.acorn, 20 + i * 40, 140, 30, 30);
+                        }
+                    }
+                    break;
+            }
+        }
+
+        function gameLoop() {
+            updateGame();
+            drawGame();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Управление
+        function movePlayer(direction) {
+            const speed = GAME_CONFIG.PLAYER_SPEED * (isMobile ? GAME_CONFIG.MOBILE_SPEED_MULTIPLIER : 1);
+            player.targetX += direction * speed;
+            player.targetX = Math.max(0, Math.min(player.targetX, canvas.width - player.w));
+        }
+
+        // Обработчики событий
+        window.addEventListener("keydown", e => {
+            if (e.code === "Space") {
+                e.preventDefault();
+                if (gameState === "start") {
+                    startGame();
+                } else if (gameState === "gameover") {
+                    gameState = "start";
+                }
+            }
+            
+            if (gameState === "play") {
+                if (e.code === "ArrowLeft") movePlayer(-1);
+                if (e.code === "ArrowRight") movePlayer(1);
+            }
+        });
+
+        document.addEventListener('click', function() {
+            if (!audioContext) {
+                initAudio();
+            }
+        });
+
+        soundToggle.addEventListener('click', toggleSound);
+
+        canvas.addEventListener('touchstart', e => {
+            e.preventDefault();
+            touchStartX = e.touches[0].clientX;
+        });
+
+        canvas.addEventListener('touchmove', e => {
+            e.preventDefault();
+            if (gameState !== "play") return;
+            
+            const touchX = e.touches[0].clientX;
+            const diff = touchX - touchStartX;
+            
+            if (Math.abs(diff) > 10) {
+                player.targetX = touchX - player.w / 2;
+                player.targetX = Math.max(0, Math.min(player.targetX, canvas.width - player.w));
+            }
+        });
+
+        leftBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            movePlayer(-1);
+        });
+
+        rightBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            movePlayer(1);
+        });
+
+        let leftInterval, rightInterval;
+
+        leftBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            movePlayer(-1);
+            leftInterval = setInterval(() => movePlayer(-1), 100);
+        });
+
+        rightBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            movePlayer(1);
+            rightInterval = setInterval(() => movePlayer(1), 100);
+        });
+
+        const stopMovement = () => {
+            clearInterval(leftInterval);
+            clearInterval(rightInterval);
+        };
+
+        leftBtn.addEventListener('touchend', stopMovement);
+        leftBtn.addEventListener('touchcancel', stopMovement);
+        rightBtn.addEventListener('touchend', stopMovement);
+        rightBtn.addEventListener('touchcancel', stopMovement);
+
+        window.addEventListener('resize', () => {
+            setupCanvas();
+            isMobile = window.innerWidth <= 768;
+            mobileControls.style.display = isMobile ? 'flex' : 'none';
+        });
+
+        // Запуск игры
+        setupCanvas();
+        initAudio();
+        loadAssets();
+        gameLoop();
+    </script>
+</body>
+</html>
